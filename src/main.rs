@@ -143,16 +143,16 @@ static FOURLETTERS: &'static str = concat!(
 );
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let five_words: Vec<&str> = FIVELETTERS.split(",").collect();
-    let four_words: Vec<&str> = FOURLETTERS.split(",").collect();
+    let mut five_words: Vec<String> = FIVELETTERS.split(",").map(|s| s.to_lowercase()).collect();
+    let four_words: Vec<String> = FOURLETTERS.split(",").map(|s| s.to_lowercase()).collect();
 
     println!("{:?}", five_words);
 
     loop {
         let guess = prompt_input("input your Wordle guess (4-5 letters):", |s| {
-            let guess = s.to_uppercase();
-            let res = (s.len() == 4 && four_words.contains(&guess.as_str()))
-                || (s.len() == 5 && five_words.contains(&guess.as_str()));
+            let guess = s.to_lowercase();
+            let res = (s.len() == 4 && four_words.contains(&guess))
+                || (s.len() == 5 && five_words.contains(&guess));
             if !res {
                 println!(
                     "guess {} should be 4-5 letters, and in the dictionary provided!",
@@ -160,7 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
             res
-        })?;
+        })?.to_lowercase();
 
         let colors = prompt_input("input the Wordle colors ([G]reen/[Y]ellow/[M]iss)", |s| {
             let res = s.len() == guess.len() && s.chars().all(|c| "GYMgym".contains(c));
@@ -168,22 +168,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("ensure that your colors is the same length of the guess, and only contains G, Y, and M!");
             }
             res
-        })?;
+        })?.to_lowercase();
 
-        // convert to letter/color pairs
-        let feedback = guess
-            .chars()
-            .zip(
-                colors
-                    .chars()
-                    .map(|ch| ch.to_string().parse::<GuessColor>()),
-            )
+        // infallible unwrap, so it's ok
+        let feedback = colors.chars()
+                    .map(|ch| ch.to_string().parse::<GuessColor>().unwrap())
             .collect::<Vec<_>>();
         println!("{:?}", feedback);
 
-        let five_words = five_words.filter(|word| {
-            
-        })
+        let old_len = five_words.len();
+        // TODO: don't just assume it's 5 words
+        five_words = five_words.into_iter().filter(|word| {
+            guess_could_be_word(&guess, word, &feedback)
+        }).collect();
+
+        println!("this guess reduced possible words from {} to {}", old_len, five_words.len());
+        println!("possible words: {:?}", five_words);
+
+        if five_words.len() == 1 || feedback.iter().all(|color| *color == GuessColor::Green) {
+            println!("wordle complete! the word is {}", five_words[0]);
+            break;
+        }
     }
 
     Ok(())
@@ -212,13 +217,52 @@ where
     }
 }
 
-fn guess_could_be_word(guess: &[(char, GuessColor)], word: &str) -> bool {
-    let processed = guess.iter().zip(word.chars()).enumerate().filter(|g| {å
-         GuessColor::Green == g.1.1 && word[g.0] == g.1.0
-    });
+fn guess_could_be_word(guess: &str, word: &str, feedback: &Vec<GuessColor>) -> bool {
+    *feedback == generate_feedback(guess, word)
 }
 
-#[derive(Copy, Clone, Debug)]
+// should only receive words of the same length
+// ensure w const generics?
+fn generate_feedback(guess: &str, word: &str) -> Vec<GuessColor> {
+    let first_pass: Vec<_> = guess.chars().zip(word.chars()).map(|p| {
+        if p.0 == p.1 {
+            ('_', '_', GuessColor::Green)
+        } else {
+            (p.0, p.1, GuessColor::Miss)
+        }
+    }).collect();
+    let mut remaining_secret: Vec<_> = first_pass.iter().map(|tr| tr.1).collect();
+
+    first_pass.iter().map(|tr| {
+        // 0 = guess, 1 = code, 2 = grade
+        if tr.2 == GuessColor::Green {
+            GuessColor::Green
+        } else if tr.2 == GuessColor::Miss && remaining_secret.contains(&tr.0) {
+            remaining_secret.remove_first(&tr.0);
+            GuessColor::Yellow
+        } else {
+            GuessColor::Miss
+        }
+    }).collect()
+}   
+
+trait RemoveFirst<T>
+where
+    T: PartialEq
+{
+    fn remove_first(&mut self, needle: &T);
+}
+
+impl<T: PartialEq> RemoveFirst<T> for Vec<T> {
+    fn remove_first(&mut self, needle: &T) { 
+        let idx = self.iter().position(|val| *val == *needle);
+        if let Some(idx) = idx {
+            self.remove(idx);
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum GuessColor {
     Miss,
     Yellow,
